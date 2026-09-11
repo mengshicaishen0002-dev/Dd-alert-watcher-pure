@@ -1,4 +1,4 @@
-name: Build DD Alert Watcher APK
+name: DD-Alert-Watcher-Pure-v1.1.7.1
 
 on:
   workflow_dispatch:
@@ -28,7 +28,7 @@ jobs:
       - name: Extract source ZIP
         run: |
           mkdir -p source
-          unzip -q DD_Alert_Watcher_Pure_v1.1.12_Source.zip -d source
+          unzip -q DD_Alert_Watcher_Pure_v1.1.7.1_Source.zip -d source
           echo "ZIP extracted successfully"
           find source -maxdepth 3 -type f | head -50
 
