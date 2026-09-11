@@ -1,10 +1,7 @@
-name: Build DD Alert Watcher APK
+name: Build APK
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
   build:
@@ -14,42 +11,100 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Gradle 8.9
+      - name: Find source ZIP
+        id: find_zip
+        shell: bash
+        run: |
+          set -e
+
+          ZIP_FILE="$(find . -maxdepth 2 -type f -name 'DD_Alert_Watcher_Pure_v1.1.7.1_Source.zip' | head -n 1)"
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: DD_Alert_Watcher_Pure_v1.1.7.1_Source.zip not found"
+            echo "Files in repository:"
+            find . -maxdepth 2 -type f | sort
+            exit 1
+          fi
+
+          echo "Found source ZIP: $ZIP_FILE"
+          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Extract source
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf extracted_source
+          mkdir -p extracted_source
+
+          unzip -q "${{ steps.find_zip.outputs.zip_file }}" -d extracted_source
+
+          echo "Extracted contents:"
+          find extracted_source -maxdepth 3 -type f | sort | head -100
+
+      - name: Locate Android project
+        id: project
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT_DIR="$(find extracted_source -type f -name settings.gradle -printf '%h\n' | head -n 1)"
+
+          if [ -z "$PROJECT_DIR" ]; then
+            PROJECT_DIR="$(find extracted_source -type f -name settings.gradle.kts -printf '%h\n' | head -n 1)"
+          fi
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: Android project not found"
+            find extracted_source -maxdepth 4 -type f | sort
+            exit 1
+          fi
+
+          echo "Android project: $PROJECT_DIR"
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Extract source ZIP
+      - name: Build debug APK
+        shell: bash
+        working-directory: ${{ steps.project.outputs.project_dir }}
         run: |
-          mkdir -p source
-          unzip -q DD_Alert_Watcher_Pure_v1.1.7.1_HandledOfferFix_Source.zip -d source
-          echo "ZIP extracted successfully"
-
-      - name: Find Android project
-        run: |
-          PROJECT_DIR=$(dirname $(find source -name settings.gradle -type f | head -1))
-          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
-          echo "Android project found at: $PROJECT_DIR"
-
-      - name: Build APK
-        run: |
-          cd "$PROJECT_DIR"
+          set -e
           gradle :app:assembleDebug --stacktrace
 
-      - name: Find APK
+      - name: Verify APK
+        id: apk
+        shell: bash
         run: |
-          APK_PATH=$(find "$PROJECT_DIR/app/build/outputs/apk/debug" -name "*.apk" -type f | head -1)
-          echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
-          echo "APK found at: $APK_PATH"
+          set -e
+
+          APK_FILE="${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK_FILE" ]; then
+            echo "ERROR: APK was not generated"
+            find "${{ steps.project.outputs.project_dir }}/app/build/outputs" -type f 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "APK generated successfully:"
+          ls -lh "$APK_FILE"
+
+          mkdir -p output
+          cp "$APK_FILE" output/DD_Alert_Watcher_Pure_v1.1.7.1.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: DD-Alert-Watcher-Pure-v1.1.7.1
-          path: ${{ env.APK_PATH }}
+          path: output/DD_Alert_Watcher_Pure_v1.1.7.1.apk
+          if-no-files-found: error
+          retention-days: 30
