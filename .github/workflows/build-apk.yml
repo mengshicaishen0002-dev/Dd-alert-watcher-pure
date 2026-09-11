@@ -1,1 +1,139 @@
+name: Build DD Alert Watcher APK
 
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '*.zip'
+      - '.github/workflows/build-apk.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Find the only source ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t ZIPS < <(find . -maxdepth 1 -type f -name '*.zip' -printf '%f\n' | sort)
+
+          if [ "${#ZIPS[@]}" -eq 0 ]; then
+            echo "ERROR: No source ZIP found in repository root."
+            exit 1
+          fi
+
+          if [ "${#ZIPS[@]}" -ne 1 ]; then
+            echo "ERROR: Expected exactly ONE source ZIP in repository root."
+            printf 'Found: %s\n' "${ZIPS[@]}"
+            exit 1
+          fi
+
+          echo "SOURCE_ZIP=${ZIPS[0]}" >> "$GITHUB_ENV"
+          echo "Using source ZIP: ${ZIPS[0]}"
+
+      - name: Extract source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf source
+          mkdir -p source
+          unzip -q "$SOURCE_ZIP" -d source
+
+      - name: Find Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SETTINGS="$(find source -type f \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) | head -1)"
+
+          if [ -z "$SETTINGS" ]; then
+            echo "ERROR: settings.gradle/settings.gradle.kts not found."
+            find source -maxdepth 4 -type f | sort | head -200
+            exit 1
+          fi
+
+          PROJECT_DIR="$(dirname "$SETTINGS")"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Android project: $PROJECT_DIR"
+
+      - name: Show source version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Source ZIP: $SOURCE_ZIP"
+
+          if [ -f "$PROJECT_DIR/app/build.gradle" ]; then
+            grep -nE 'versionCode|versionName' "$PROJECT_DIR/app/build.gradle" || true
+          elif [ -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
+            grep -nE 'versionCode|versionName' "$PROJECT_DIR/app/build.gradle.kts" || true
+          fi
+
+      - name: Clean and build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew clean :app:assembleDebug --no-build-cache --rerun-tasks --stacktrace
+          else
+            gradle clean :app:assembleDebug --no-build-cache --rerun-tasks --stacktrace
+          fi
+
+      - name: Find APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK_PATH="$(find "$PROJECT_DIR/app/build/outputs/apk/debug" -type f -name '*.apk' | head -1)"
+
+          if [ -z "$APK_PATH" ]; then
+            echo "ERROR: APK not found."
+            exit 1
+          fi
+
+          echo "APK_PATH=$APK_PATH" >> "$GITHUB_ENV"
+          echo "APK found: $APK_PATH"
+          ls -lh "$APK_PATH"
+
+      - name: Prepare APK filename
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE="${SOURCE_ZIP%.zip}"
+          SAFE_BASE="$(echo "$BASE" | tr ' /' '__')"
+          OUT_APK="${SAFE_BASE}.apk"
+
+          cp "$APK_PATH" "$OUT_APK"
+
+          echo "OUT_APK=$OUT_APK" >> "$GITHUB_ENV"
+          echo "ARTIFACT_NAME=$SAFE_BASE" >> "$GITHUB_ENV"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.OUT_APK }}
+          if-no-files-found: error
+          retention-days: 7
